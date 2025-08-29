@@ -288,17 +288,19 @@ void parse_nmea_sentence(const char* sentence)
     if (sentence[0] != '$')
         return;
 
+    // Print all raw sentences
+    printf("%s\n", sentence);
+
     // Only process sentences we care about to save CPU
     if (strncmp(sentence, "$GPRMC", 6) != 0 &&
         strncmp(sentence, "$GPVTG", 6) != 0 &&
         strncmp(sentence, "$GPGGA", 6) != 0 &&
         strncmp(sentence, "$GPGLL", 6) != 0)
     {
+        // Print unknown sentence type
+        printf("Unknown sentence type: %s\n", sentence);
         return;
     }
-
-    // Print only the raw sentence
-    printf("%s\n", sentence);
 
     // Make a copy since split_string modifies the string
     char sentence_copy[256];

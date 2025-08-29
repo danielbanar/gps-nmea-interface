@@ -14,6 +14,9 @@
 #define GPS_DIR "/tmp/gps"
 #define GPS_DATA_FILE "/tmp/gps/gps_data"
 
+// Global flag for verbose output
+int verbose = 0;
+
 // Function to convert baudrate string to speed_t
 speed_t get_baudrate(int baud)
 {
@@ -217,7 +220,7 @@ void write_gps_data()
             fprintf(file, "month: N/A\n");
             fprintf(file, "day: N/A\n");
             fprintf(file, "hour: N/A\n");
-            fprintf(file, "minute: N/A\n");
+            fprintf(file, "minette: N/A\n");
             fprintf(file, "second: N/A\n");
             fprintf(file, "millisecond: N/A\n");
         }
@@ -360,8 +363,11 @@ void parse_nmea_sentence(const char* sentence)
     if (sentence[0] != '$')
         return;
 
-    // Print all raw sentences
-    printf("%s\n", sentence);
+    // Print all raw sentences only if verbose mode is enabled
+    if (verbose)
+    {
+        printf("%s\n", sentence);
+    }
 
     // Only process sentences we care about to save CPU
     if (strncmp(sentence, "$GPRMC", 6) != 0 &&
@@ -370,8 +376,11 @@ void parse_nmea_sentence(const char* sentence)
         strncmp(sentence, "$GPGLL", 6) != 0 &&
         strncmp(sentence, "$GPGSA", 6) != 0)
     {
-        // Print unknown sentence type
-        printf("Unknown sentence type: %s\n", sentence);
+        // Print unknown sentence type only if verbose mode is enabled
+        if (verbose)
+        {
+            printf("Unknown sentence type: %s\n", sentence);
+        }
         return;
     }
 
@@ -534,6 +543,7 @@ void print_usage(const char* program_name)
     printf("Options:\n");
     printf("  -p <port>     Serial port (default: %s)\n", DEFAULT_GPS_PORT);
     printf("  -b <baudrate> Baud rate (default: 9600)\n");
+    printf("  -v            Enable verbose output (print NMEA sentences)\n");
     printf("  -h            Show this help message\n");
 }
 
@@ -542,10 +552,11 @@ int main(int argc, char* argv[])
     char* gps_port = DEFAULT_GPS_PORT;
     int baudrate = 9600;
     speed_t speed = DEFAULT_BAUDRATE;
+    verbose = 0; // Default to non-verbose mode
 
     // Parse command line arguments
     int opt;
-    while ((opt = getopt(argc, argv, "p:b:h")) != -1)
+    while ((opt = getopt(argc, argv, "p:b:vh")) != -1)
     {
         switch (opt)
         {
@@ -555,6 +566,9 @@ int main(int argc, char* argv[])
         case 'b':
             baudrate = atoi(optarg);
             speed = get_baudrate(baudrate);
+            break;
+        case 'v':
+            verbose = 1;
             break;
         case 'h':
             print_usage(argv[0]);
@@ -566,6 +580,10 @@ int main(int argc, char* argv[])
     }
 
     printf("Using serial port: %s, baudrate: %d\n", gps_port, baudrate);
+    if (verbose)
+    {
+        printf("Verbose mode enabled - printing NMEA sentences\n");
+    }
 
     // Initialize GPS data structure
     memset(&gpsInfo, 0, sizeof(gpsInfo));

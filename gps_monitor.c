@@ -171,31 +171,45 @@ int parse_gps_data_file(struct GPSDisplayData* data)
     return 1;
 }
 
-// Function to check if a value represents valid data
-int is_valid_value(const char* value, int is_dop)
-{
-    if (value[0] == '\0' || strcmp(value, "N/A") == 0)
-    {
-        return 0;
-    }
-
-    double num = atof(value);
-    if (is_dop)
-    {
-        // DOP values should be reasonable (not 99.99)
-        return (num < 50.0 && num > 0.0);
-    }
-    else
-    {
-        // Other values should not be zero (or very close to zero)
-        return (fabs(num) > 0.0001);
-    }
-}
-
 // Function to create a formatted line with proper padding
 void format_line(const char* content)
 {
     printf("║ %-76s ║\n", content);
+}
+
+// Function to format time components with leading zeros
+void format_time_component(char* dest, size_t dest_size, const char* value, int max_digits)
+{
+    if (strcmp(value, "N/A") == 0)
+    {
+        strncpy(dest, "N/A", dest_size);
+        return;
+    }
+
+    int num = atoi(value);
+    if (max_digits == 2)
+    {
+        snprintf(dest, dest_size, "%02d", num);
+    }
+    else
+    {
+        snprintf(dest, dest_size, "%d", num);
+    }
+}
+
+// Function to reconstruct the combined datetime string
+void reconstruct_datetime(char* dest, size_t dest_size, const char* year, const char* month,
+                          const char* day, const char* hour, const char* minute, const char* second)
+{
+    if (strcmp(year, "N/A") == 0 || strcmp(month, "N/A") == 0 || strcmp(day, "N/A") == 0 ||
+        strcmp(hour, "N/A") == 0 || strcmp(minute, "N/A") == 0 || strcmp(second, "N/A") == 0)
+    {
+        strncpy(dest, "N/A", dest_size);
+        return;
+    }
+
+    snprintf(dest, dest_size, "%s-%s-%s %s:%s:%s",
+             year, month, day, hour, minute, second);
 }
 
 // Function to display data in a properly aligned box
@@ -208,9 +222,18 @@ void display_boxed_data()
         return;
     }
 
-    // Determine validity from status
-    int valid_time = (strcmp(data.status, "NO_TIME") != 0);
-    int valid_fix = (strcmp(data.status, "FIX") == 0);
+    // Format time components with leading zeros
+    char formatted_minute[8], formatted_second[8], formatted_month[8], formatted_day[8];
+    format_time_component(formatted_minute, sizeof(formatted_minute), data.minute, 2);
+    format_time_component(formatted_second, sizeof(formatted_second), data.second, 2);
+    format_time_component(formatted_month, sizeof(formatted_month), data.month, 2);
+    format_time_component(formatted_day, sizeof(formatted_day), data.day, 2);
+
+    // Reconstruct the combined datetime string
+    char reconstructed_datetime[64];
+    reconstruct_datetime(reconstructed_datetime, sizeof(reconstructed_datetime),
+                         data.year, formatted_month, formatted_day,
+                         data.hour, formatted_minute, formatted_second);
 
     // Clear screen
     printf("\033[2J\033[H");
@@ -226,76 +249,68 @@ void display_boxed_data()
     format_line(status_line);
     printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
 
-    // Date/Time section - always show if available
-    if (strcmp(data.datetime, "N/A") != 0)
-    {
-        char time_line[128];
-        snprintf(time_line, sizeof(time_line), "Date/Time: %s", data.datetime);
-        format_line(time_line);
-        printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
-    }
+    // Date/Time section - always show
+    format_line("Date/Time:");
+    char time_line[128];
 
-    // Location section
-    if (valid_fix)
-    {
-        format_line("Location:");
-        char loc_line[128];
+    // Show reconstructed datetime
+    snprintf(time_line, sizeof(time_line), "  Combined: %s", reconstructed_datetime);
+    format_line(time_line);
 
-        snprintf(loc_line, sizeof(loc_line), "  Latitude: %s", data.latitude);
-        format_line(loc_line);
+    // Show individual components with proper formatting
+    snprintf(time_line, sizeof(time_line), "  Date: %s-%s-%s", data.year, formatted_month, formatted_day);
+    format_line(time_line);
 
-        snprintf(loc_line, sizeof(loc_line), "  Longitude: %s", data.longitude);
-        format_line(loc_line);
-
-        snprintf(loc_line, sizeof(loc_line), "  Altitude: %s m", data.altitude);
-        format_line(loc_line);
-
-        printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
-    }
-
-    // Speed section
-    if (valid_fix &&
-        (is_valid_value(data.speed2d, 0) ||
-         is_valid_value(data.speed3d, 0) ||
-         is_valid_value(data.vertical_speed, 0)))
-    {
-        format_line("Speed:");
-        char speed_line[128];
-
-        snprintf(speed_line, sizeof(speed_line), "  2D: %s km/h", data.speed2d);
-        format_line(speed_line);
-
-        snprintf(speed_line, sizeof(speed_line), "  3D: %s km/h", data.speed3d);
-        format_line(speed_line);
-
-        snprintf(speed_line, sizeof(speed_line), "  Vertical: %s m/s", data.vertical_speed);
-        format_line(speed_line);
-
-        printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
-    }
-
-    // Satellites and DOP section
-    if (valid_fix && is_valid_value(data.satellites, 0))
-    {
-        char sats_line[128];
-        snprintf(sats_line, sizeof(sats_line), "Satellites: %s", data.satellites);
-        format_line(sats_line);
-    }
-
-    if (valid_fix &&
-        (is_valid_value(data.pdop, 1) ||
-         is_valid_value(data.hdop, 1) ||
-         is_valid_value(data.vdop, 1)))
-    {
-        char dop_line[128];
-        snprintf(dop_line, sizeof(dop_line), "DOP: PDOP: %s, HDOP: %s, VDOP: %s",
-                 data.pdop, data.hdop, data.vdop);
-        format_line(dop_line);
-    }
+    // Show time without milliseconds
+    snprintf(time_line, sizeof(time_line), "  Time: %s:%s:%s",
+             data.hour, formatted_minute, formatted_second);
+    format_line(time_line);
 
     printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
 
-    // Timestamp section
+    // Location section - always show
+    format_line("Location:");
+    char loc_line[128];
+
+    snprintf(loc_line, sizeof(loc_line), "  Latitude: %s", data.latitude);
+    format_line(loc_line);
+
+    snprintf(loc_line, sizeof(loc_line), "  Longitude: %s", data.longitude);
+    format_line(loc_line);
+
+    snprintf(loc_line, sizeof(loc_line), "  Altitude: %s m", data.altitude);
+    format_line(loc_line);
+
+    printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
+
+    // Speed section - always show
+    format_line("Speed:");
+    char speed_line[128];
+
+    snprintf(speed_line, sizeof(speed_line), "  2D: %s km/h", data.speed2d);
+    format_line(speed_line);
+
+    snprintf(speed_line, sizeof(speed_line), "  3D: %s km/h", data.speed3d);
+    format_line(speed_line);
+
+    snprintf(speed_line, sizeof(speed_line), "  Vertical: %s m/s", data.vertical_speed);
+    format_line(speed_line);
+
+    printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
+
+    // Satellites and DOP section - always show
+    char sats_line[128];
+    snprintf(sats_line, sizeof(sats_line), "Satellites: %s", data.satellites);
+    format_line(sats_line);
+
+    char dop_line[128];
+    snprintf(dop_line, sizeof(dop_line), "DOP: PDOP: %s, HDOP: %s, VDOP: %s",
+             data.pdop, data.hdop, data.vdop);
+    format_line(dop_line);
+
+    printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
+
+    // Timestamp section - always show
     if (strcmp(data.timestamp, "N/A") != 0)
     {
         char ts_line[128];

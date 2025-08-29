@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,6 +6,7 @@
 #include <unistd.h>
 
 #define GPS_DIR "/tmp/gps"
+#define SCREEN_WIDTH 80
 
 // Function to read a value from a file in /tmp/gps
 int read_from_file(const char* filename, char* buffer, size_t buffer_size)
@@ -35,27 +37,48 @@ int read_from_file(const char* filename, char* buffer, size_t buffer_size)
     return 1;
 }
 
-// Function to draw a horizontal separator line
-void draw_separator(int width)
+// Function to check if a value represents valid data
+int is_valid_value(const char* value, int is_dop)
 {
-    printf("╟");
-    for (int i = 0; i < width - 2; i++)
+    if (value[0] == '\0' || strcmp(value, "N/A") == 0)
     {
-        printf("─");
+        return 0;
     }
-    printf("╢\n");
+
+    double num = atof(value);
+    if (is_dop)
+    {
+        // DOP values should be reasonable (not 99.99)
+        return (num < 50.0 && num > 0.0);
+    }
+    else
+    {
+        // Other values should not be zero (or very close to zero)
+        return (fabs(num) > 0.0001);
+    }
 }
 
-// Function to display data in a box
+// Function to create a formatted line with proper padding
+void format_line(const char* content)
+{
+    printf("║ %-76s ║\n", content);
+}
+
+// Function to display data in a properly aligned box
 void display_boxed_data()
 {
     char value[64];
-    int valid = 0;
+    int valid_time = 0;
+    int valid_fix = 0;
 
-    // Read validity flag
-    if (read_from_file("valid", value, sizeof(value)))
+    // Read validity flags
+    if (read_from_file("valid_time", value, sizeof(value)))
     {
-        valid = atoi(value);
+        valid_time = atoi(value);
+    }
+    if (read_from_file("valid_fix", value, sizeof(value)))
+    {
+        valid_fix = atoi(value);
     }
 
     // Clear screen
@@ -63,64 +86,121 @@ void display_boxed_data()
 
     // Top border
     printf("╔══════════════════════════════════════════════════════════════════════════════╗\n");
-    printf("║                              GPS DATA MONITOR                               ║\n");
+    printf("║                           GPS DATA MONITOR                                   ║\n");
     printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
 
     // Status section
-    printf("║ Status: %-67s ║\n", valid ? "VALID FIX" : "NO VALID FIX");
-    draw_separator(80);
+    char status_line[128];
+    snprintf(status_line, sizeof(status_line), "Status: Time: %s, Fix: %s",
+             valid_time ? "VALID" : "INVALID",
+             valid_fix ? "VALID" : "INVALID");
+    format_line(status_line);
+    printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
 
-    // Date/Time section
-    if (read_from_file("datetime", value, sizeof(value)))
+    // Date/Time section - always show if available
+    char datetime[64] = "N/A";
+    if (read_from_file("datetime", datetime, sizeof(datetime)) && strlen(datetime) > 0)
     {
-        printf("║ Date/Time: %-65s ║\n", value);
+        char time_line[128];
+        snprintf(time_line, sizeof(time_line), "Date/Time: %s", datetime);
+        format_line(time_line);
+        printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
     }
-    draw_separator(80);
 
     // Location section
-    char lon[64], lat[64], alt[64];
+    char lon[64] = "N/A", lat[64] = "N/A", alt[64] = "N/A";
     if (read_from_file("longitude", lon, sizeof(lon)) &&
         read_from_file("latitude", lat, sizeof(lat)) &&
         read_from_file("altitude", alt, sizeof(alt)))
     {
-        printf("║ Location:                                                                ║\n");
-        printf("║   Latitude: %-30s Longitude: %-26s ║\n", lat, lon);
-        printf("║   Altitude: %-65s ║\n", alt);
+        if (!is_valid_value(lon, 0) || !is_valid_value(lat, 0))
+        {
+            strcpy(lon, "N/A");
+            strcpy(lat, "N/A");
+            strcpy(alt, "N/A");
+        }
+
+        format_line("Location:");
+        char loc_line[128];
+
+        snprintf(loc_line, sizeof(loc_line), "  Latitude: %s", lat);
+        format_line(loc_line);
+
+        snprintf(loc_line, sizeof(loc_line), "  Longitude: %s", lon);
+        format_line(loc_line);
+
+        snprintf(loc_line, sizeof(loc_line), "  Altitude: %s m", alt);
+        format_line(loc_line);
+
+        printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
     }
-    draw_separator(80);
 
     // Speed section
-    char speed2d[64], speed3d[64], vspeed[64];
+    char speed2d[64] = "N/A", speed3d[64] = "N/A", vspeed[64] = "N/A";
     if (read_from_file("speed2d", speed2d, sizeof(speed2d)) &&
         read_from_file("speed3d", speed3d, sizeof(speed3d)) &&
         read_from_file("vertical_speed", vspeed, sizeof(vspeed)))
     {
-        printf("║ Speed:                                                                   ║\n");
-        printf("║   2D: %-10s km/h    3D: %-10s km/h    Vertical: %-8s m/s ║\n",
-               speed2d, speed3d, vspeed);
+        if (!is_valid_value(speed2d, 0) || !is_valid_value(speed3d, 0))
+        {
+            strcpy(speed2d, "N/A");
+            strcpy(speed3d, "N/A");
+            strcpy(vspeed, "N/A");
+        }
+
+        format_line("Speed:");
+        char speed_line[128];
+
+        snprintf(speed_line, sizeof(speed_line), "  2D: %s km/h", speed2d);
+        format_line(speed_line);
+
+        snprintf(speed_line, sizeof(speed_line), "  3D: %s km/h", speed3d);
+        format_line(speed_line);
+
+        snprintf(speed_line, sizeof(speed_line), "  Vertical: %s m/s", vspeed);
+        format_line(speed_line);
+
+        printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
     }
-    draw_separator(80);
 
     // Satellites and DOP section
-    char sats[64], pdop[64], hdop[64], vdop[64];
+    char sats[64] = "N/A";
     if (read_from_file("satellites", sats, sizeof(sats)))
     {
-        printf("║ Satellites: %-65s ║\n", sats);
+        if (!is_valid_value(sats, 0) || atoi(sats) == 0)
+        {
+            strcpy(sats, "N/A");
+        }
+        char sats_line[128];
+        snprintf(sats_line, sizeof(sats_line), "Satellites: %s", sats);
+        format_line(sats_line);
     }
 
+    char pdop[64] = "N/A", hdop[64] = "N/A", vdop[64] = "N/A";
     if (read_from_file("pdop", pdop, sizeof(pdop)) &&
         read_from_file("hdop", hdop, sizeof(hdop)) &&
         read_from_file("vdop", vdop, sizeof(vdop)))
     {
-        printf("║ DOP: PDOP: %-8s HDOP: %-8s VDOP: %-8s                     ║\n",
-               pdop, hdop, vdop);
+        if (!is_valid_value(pdop, 1) || !is_valid_value(hdop, 1) || !is_valid_value(vdop, 1))
+        {
+            strcpy(pdop, "N/A");
+            strcpy(hdop, "N/A");
+            strcpy(vdop, "N/A");
+        }
+
+        char dop_line[128];
+        snprintf(dop_line, sizeof(dop_line), "DOP: PDOP: %s, HDOP: %s, VDOP: %s", pdop, hdop, vdop);
+        format_line(dop_line);
     }
-    draw_separator(80);
+
+    printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
 
     // Timestamp section
     if (read_from_file("timestamp", value, sizeof(value)))
     {
-        printf("║ Timestamp: %-65s ║\n", value);
+        char ts_line[128];
+        snprintf(ts_line, sizeof(ts_line), "Timestamp: %s", value);
+        format_line(ts_line);
     }
 
     // Bottom border

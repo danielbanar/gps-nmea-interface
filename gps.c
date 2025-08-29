@@ -171,7 +171,8 @@ struct GPSData
     double knots;
     int satellites;
     time_t timestamp;
-    int valid;                 // Flag to indicate if GPS data is valid
+    int valid_time;            // Flag to indicate if time data is valid
+    int valid_fix;             // Flag to indicate if GPS fix is valid
     double vertical_speed;     // Vertical speed in m/s
     double last_altitude;      // Previous altitude for vertical speed calculation
     time_t last_altitude_time; // Time of last altitude measurement
@@ -223,37 +224,6 @@ void calculate_3d_speed()
                             gpsInfo.vertical_speed * gpsInfo.vertical_speed);
 }
 
-// Function to check if GPS data is valid
-int is_gps_data_valid()
-{
-    // Check if we have time data (indicates a fix attempt)
-    if (!gpsInfo.has_time)
-    {
-        return 0;
-    }
-
-    // Check if coordinates are within valid ranges
-    if (gpsInfo.latitude < -90 || gpsInfo.latitude > 90 ||
-        gpsInfo.longitude < -180 || gpsInfo.longitude > 180)
-    {
-        return 0;
-    }
-
-    // Check if we have a reasonable number of satellites
-    if (gpsInfo.satellites < 3)
-    {
-        return 0;
-    }
-
-    // Check if DOP values are reasonable (lower is better)
-    if (gpsInfo.hdop > 10.0 || gpsInfo.vdop > 10.0 || gpsInfo.pdop > 10.0)
-    {
-        return 0;
-    }
-
-    return 1;
-}
-
 // Function to update GPS value files
 void update_gps_files()
 {
@@ -261,95 +231,137 @@ void update_gps_files()
     static char datetime_str[64];
     static struct tm timeinfo;
 
-    // Check if GPS data is valid
-    int valid = is_gps_data_valid();
+    // Check if time data is valid (has time and reasonable year)
+    int is_time_valid = gpsInfo.has_time && gpsInfo.year >= 2000 && gpsInfo.year <= 2100;
 
-    // Write validity flag
-    write_to_file("valid", valid ? "1" : "0");
+    // Check if GPS fix is valid (has coordinates, reasonable values, etc.)
+    int is_fix_valid = is_time_valid &&
+                       (gpsInfo.latitude >= -90 && gpsInfo.latitude <= 90) &&
+                       (gpsInfo.longitude >= -180 && gpsInfo.longitude <= 180) &&
+                       (gpsInfo.satellites >= 3) &&
+                       (gpsInfo.hdop < 10.0 && gpsInfo.vdop < 10.0 && gpsInfo.pdop < 10.0);
 
-    if (!valid)
+    // Update validity flags
+    gpsInfo.valid_time = is_time_valid;
+    gpsInfo.valid_fix = is_fix_valid;
+
+    // Write validity flags
+    write_to_file("valid_time", is_time_valid ? "1" : "0");
+    write_to_file("valid_fix", is_fix_valid ? "1" : "0");
+
+    // Always write time data if available
+    if (is_time_valid)
     {
-        return;
+        // Write date and time values
+        snprintf(value_str, sizeof(value_str), "%04d", gpsInfo.year);
+        write_to_file("year", value_str);
+
+        snprintf(value_str, sizeof(value_str), "%02d", gpsInfo.month);
+        write_to_file("month", value_str);
+
+        snprintf(value_str, sizeof(value_str), "%02d", gpsInfo.day);
+        write_to_file("day", value_str);
+
+        snprintf(value_str, sizeof(value_str), "%02d", gpsInfo.hour);
+        write_to_file("hour", value_str);
+
+        snprintf(value_str, sizeof(value_str), "%02d", gpsInfo.minute);
+        write_to_file("minute", value_str);
+
+        snprintf(value_str, sizeof(value_str), "%02d", gpsInfo.second);
+        write_to_file("second", value_str);
+
+        snprintf(value_str, sizeof(value_str), "%03d", gpsInfo.millisecond);
+        write_to_file("millisecond", value_str);
+
+        // Write formatted date and time (without milliseconds)
+        snprintf(datetime_str, sizeof(datetime_str), "%04d-%02d-%02d %02d:%02d:%02d",
+                 gpsInfo.year, gpsInfo.month, gpsInfo.day,
+                 gpsInfo.hour, gpsInfo.minute, gpsInfo.second);
+        write_to_file("datetime", datetime_str);
+
+        // Calculate and write timestamp
+        timeinfo.tm_year = gpsInfo.year - 1900;
+        timeinfo.tm_mon = gpsInfo.month - 1;
+        timeinfo.tm_mday = gpsInfo.day;
+        timeinfo.tm_hour = gpsInfo.hour;
+        timeinfo.tm_min = gpsInfo.minute;
+        timeinfo.tm_sec = gpsInfo.second;
+        timeinfo.tm_isdst = -1;
+
+        gpsInfo.timestamp = mktime(&timeinfo);
+        snprintf(value_str, sizeof(value_str), "%ld", gpsInfo.timestamp);
+        write_to_file("timestamp", value_str);
+    }
+    else
+    {
+        // Write empty time files
+        write_to_file("year", "N/A");
+        write_to_file("month", "N/A");
+        write_to_file("day", "N/A");
+        write_to_file("hour", "N/A");
+        write_to_file("minute", "N/A");
+        write_to_file("second", "N/A");
+        write_to_file("millisecond", "N/A");
+        write_to_file("datetime", "N/A");
+        write_to_file("timestamp", "N/A");
     }
 
-    // Calculate vertical speed and 3D speed
-    calculate_vertical_speed();
-    calculate_3d_speed();
+    // Only write position/speed data if fix is valid
+    if (is_fix_valid)
+    {
+        // Calculate vertical speed and 3D speed
+        calculate_vertical_speed();
+        calculate_3d_speed();
 
-    // Write basic GPS values
-    snprintf(value_str, sizeof(value_str), "%.6f", gpsInfo.longitude);
-    write_to_file("longitude", value_str);
+        // Write basic GPS values
+        snprintf(value_str, sizeof(value_str), "%.6f", gpsInfo.longitude);
+        write_to_file("longitude", value_str);
 
-    snprintf(value_str, sizeof(value_str), "%.6f", gpsInfo.latitude);
-    write_to_file("latitude", value_str);
+        snprintf(value_str, sizeof(value_str), "%.6f", gpsInfo.latitude);
+        write_to_file("latitude", value_str);
 
-    snprintf(value_str, sizeof(value_str), "%.1f", gpsInfo.altitude);
-    write_to_file("altitude", value_str);
+        snprintf(value_str, sizeof(value_str), "%.1f", gpsInfo.altitude);
+        write_to_file("altitude", value_str);
 
-    snprintf(value_str, sizeof(value_str), "%d", gpsInfo.satellites);
-    write_to_file("satellites", value_str);
+        snprintf(value_str, sizeof(value_str), "%d", gpsInfo.satellites);
+        write_to_file("satellites", value_str);
 
-    // Write 2D and 3D speed values
-    snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.speed_2d);
-    write_to_file("speed2d", value_str);
+        // Write 2D and 3D speed values
+        snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.speed_2d);
+        write_to_file("speed2d", value_str);
 
-    snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.speed_3d);
-    write_to_file("speed3d", value_str);
+        snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.speed_3d);
+        write_to_file("speed3d", value_str);
 
-    // Write vertical speed
-    snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.vertical_speed);
-    write_to_file("vertical_speed", value_str);
+        // Write vertical speed
+        snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.vertical_speed);
+        write_to_file("vertical_speed", value_str);
 
-    // Write DOP values
-    snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.pdop);
-    write_to_file("pdop", value_str);
+        // Write DOP values
+        snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.pdop);
+        write_to_file("pdop", value_str);
 
-    snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.hdop);
-    write_to_file("hdop", value_str);
+        snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.hdop);
+        write_to_file("hdop", value_str);
 
-    snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.vdop);
-    write_to_file("vdop", value_str);
-
-    // Write date and time values
-    snprintf(value_str, sizeof(value_str), "%04d", gpsInfo.year);
-    write_to_file("year", value_str);
-
-    snprintf(value_str, sizeof(value_str), "%02d", gpsInfo.month);
-    write_to_file("month", value_str);
-
-    snprintf(value_str, sizeof(value_str), "%02d", gpsInfo.day);
-    write_to_file("day", value_str);
-
-    snprintf(value_str, sizeof(value_str), "%02d", gpsInfo.hour);
-    write_to_file("hour", value_str);
-
-    snprintf(value_str, sizeof(value_str), "%02d", gpsInfo.minute);
-    write_to_file("minute", value_str);
-
-    snprintf(value_str, sizeof(value_str), "%02d", gpsInfo.second);
-    write_to_file("second", value_str);
-
-    snprintf(value_str, sizeof(value_str), "%03d", gpsInfo.millisecond);
-    write_to_file("millisecond", value_str);
-
-    // Write formatted date and time (without milliseconds)
-    snprintf(datetime_str, sizeof(datetime_str), "%04d-%02d-%02d %02d:%02d:%02d",
-             gpsInfo.year, gpsInfo.month, gpsInfo.day,
-             gpsInfo.hour, gpsInfo.minute, gpsInfo.second);
-    write_to_file("datetime", datetime_str);
-
-    // Calculate and write timestamp
-    timeinfo.tm_year = gpsInfo.year - 1900;
-    timeinfo.tm_mon = gpsInfo.month - 1;
-    timeinfo.tm_mday = gpsInfo.day;
-    timeinfo.tm_hour = gpsInfo.hour;
-    timeinfo.tm_min = gpsInfo.minute;
-    timeinfo.tm_sec = gpsInfo.second;
-    timeinfo.tm_isdst = -1;
-
-    gpsInfo.timestamp = mktime(&timeinfo);
-    snprintf(value_str, sizeof(value_str), "%ld", gpsInfo.timestamp);
-    write_to_file("timestamp", value_str);
+        snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.vdop);
+        write_to_file("vdop", value_str);
+    }
+    else
+    {
+        // Write empty files for invalid data
+        write_to_file("longitude", "N/A");
+        write_to_file("latitude", "N/A");
+        write_to_file("altitude", "N/A");
+        write_to_file("satellites", "N/A");
+        write_to_file("speed2d", "N/A");
+        write_to_file("speed3d", "N/A");
+        write_to_file("vertical_speed", "N/A");
+        write_to_file("pdop", "N/A");
+        write_to_file("hdop", "N/A");
+        write_to_file("vdop", "N/A");
+    }
 }
 
 // Function to parse the NMEA sentence
@@ -411,17 +423,17 @@ void parse_nmea_sentence(const char* sentence)
                 // Check if data is valid (status field)
                 if (components[2][0] == 'A')
                 {
-                    gpsInfo.valid = 1;
+                    gpsInfo.valid_fix = 1;
                 }
                 else
                 {
-                    gpsInfo.valid = 0;
+                    gpsInfo.valid_fix = 0;
                 }
             }
             else
             {
                 gpsInfo.has_time = 0;
-                gpsInfo.valid = 0;
+                gpsInfo.valid_fix = 0;
             }
 
             update_gps_files();
@@ -459,17 +471,17 @@ void parse_nmea_sentence(const char* sentence)
                 // Check if data is valid (fix quality field)
                 if (atoi(components[6]) > 0)
                 {
-                    gpsInfo.valid = 1;
+                    gpsInfo.valid_fix = 1;
                 }
                 else
                 {
-                    gpsInfo.valid = 0;
+                    gpsInfo.valid_fix = 0;
                 }
             }
             else
             {
                 gpsInfo.has_time = 0;
-                gpsInfo.valid = 0;
+                gpsInfo.valid_fix = 0;
             }
 
             update_gps_files();
@@ -495,17 +507,17 @@ void parse_nmea_sentence(const char* sentence)
                 // Check if data is valid (status field)
                 if (components[6][0] == 'A')
                 {
-                    gpsInfo.valid = 1;
+                    gpsInfo.valid_fix = 1;
                 }
                 else
                 {
-                    gpsInfo.valid = 0;
+                    gpsInfo.valid_fix = 0;
                 }
             }
             else
             {
                 gpsInfo.has_time = 0;
-                gpsInfo.valid = 0;
+                gpsInfo.valid_fix = 0;
             }
 
             update_gps_files();
@@ -567,14 +579,16 @@ int main(int argc, char* argv[])
 
     // Initialize GPS data structure
     memset(&gpsInfo, 0, sizeof(gpsInfo));
-    gpsInfo.valid = 0;    // Initially invalid
-    gpsInfo.has_time = 0; // Initially no time data
+    gpsInfo.valid_time = 0; // Initially invalid time
+    gpsInfo.valid_fix = 0;  // Initially invalid fix
+    gpsInfo.has_time = 0;   // Initially no time data
 
     // Create /tmp/gps directory
     mkdir(GPS_DIR, 0777);
 
-    // Write initial valid file
-    write_to_file("valid", "0");
+    // Write initial validity files
+    write_to_file("valid_time", "0");
+    write_to_file("valid_fix", "0");
 
     int serial_fd = open(gps_port, O_RDWR | O_NOCTTY);
     if (serial_fd == -1)

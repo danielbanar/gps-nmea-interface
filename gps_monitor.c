@@ -212,6 +212,32 @@ void reconstruct_datetime(char* dest, size_t dest_size, const char* year, const 
              year, month, day, hour, minute, second);
 }
 
+// Function to format coordinates with directional letters
+void format_coordinate(char* dest, size_t dest_size, const char* coord_str, int is_latitude)
+{
+    if (strcmp(coord_str, "N/A") == 0)
+    {
+        strncpy(dest, "N/A", dest_size);
+        return;
+    }
+
+    double coord = atof(coord_str);
+    char direction;
+
+    if (is_latitude)
+    {
+        direction = (coord >= 0) ? 'N' : 'S';
+        coord = fabs(coord);
+        snprintf(dest, dest_size, "%.6f° %c", coord, direction);
+    }
+    else
+    {
+        direction = (coord >= 0) ? 'E' : 'W';
+        coord = fabs(coord);
+        snprintf(dest, dest_size, "%.6f° %c", coord, direction);
+    }
+}
+
 // Function to display data in a properly aligned box
 void display_boxed_data()
 {
@@ -234,6 +260,11 @@ void display_boxed_data()
     reconstruct_datetime(reconstructed_datetime, sizeof(reconstructed_datetime),
                          data.year, formatted_month, formatted_day,
                          data.hour, formatted_minute, formatted_second);
+
+    // Format coordinates with directional letters
+    char formatted_latitude[32], formatted_longitude[32];
+    format_coordinate(formatted_latitude, sizeof(formatted_latitude), data.latitude, 1);
+    format_coordinate(formatted_longitude, sizeof(formatted_longitude), data.longitude, 0);
 
     // Clear screen
     printf("\033[2J\033[H");
@@ -272,10 +303,10 @@ void display_boxed_data()
     format_line("Location:");
     char loc_line[128];
 
-    snprintf(loc_line, sizeof(loc_line), "  Latitude: %s", data.latitude);
+    snprintf(loc_line, sizeof(loc_line), "  Latitude: %s", formatted_latitude);
     format_line(loc_line);
 
-    snprintf(loc_line, sizeof(loc_line), "  Longitude: %s", data.longitude);
+    snprintf(loc_line, sizeof(loc_line), "  Longitude: %s", formatted_longitude);
     format_line(loc_line);
 
     snprintf(loc_line, sizeof(loc_line), "  Altitude: %s m", data.altitude);

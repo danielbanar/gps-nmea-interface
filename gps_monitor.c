@@ -35,7 +35,19 @@ int read_from_file(const char* filename, char* buffer, size_t buffer_size)
     return 1;
 }
 
-void display_gps_data()
+// Function to draw a horizontal separator line
+void draw_separator(int width)
+{
+    printf("╟");
+    for (int i = 0; i < width - 2; i++)
+    {
+        printf("─");
+    }
+    printf("╢\n");
+}
+
+// Function to display data in a box
+void display_boxed_data()
 {
     char value[64];
     int valid = 0;
@@ -46,53 +58,73 @@ void display_gps_data()
         valid = atoi(value);
     }
 
-    if (!valid)
-    {
-        printf("GPS Data: No valid fix\n");
-        return;
-    }
-
     // Clear screen
     printf("\033[2J\033[H");
 
-    printf("=== GPS DATA MONITOR ===\n\n");
+    // Top border
+    printf("╔══════════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║                              GPS DATA MONITOR                               ║\n");
+    printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
 
-    // Read and display date/time
+    // Status section
+    printf("║ Status: %-67s ║\n", valid ? "VALID FIX" : "NO VALID FIX");
+    draw_separator(80);
+
+    // Date/Time section
     if (read_from_file("datetime", value, sizeof(value)))
     {
-        printf("Date/Time: %s\n", value);
+        printf("║ Date/Time: %-65s ║\n", value);
     }
+    draw_separator(80);
 
-    // Read and display location
+    // Location section
     char lon[64], lat[64], alt[64];
     if (read_from_file("longitude", lon, sizeof(lon)) &&
         read_from_file("latitude", lat, sizeof(lat)) &&
         read_from_file("altitude", alt, sizeof(alt)))
     {
-        printf("Location: Lat %s, Lon %s, Alt %s m\n", lat, lon, alt);
+        printf("║ Location:                                                                ║\n");
+        printf("║   Latitude: %-30s Longitude: %-26s ║\n", lat, lon);
+        printf("║   Altitude: %-65s ║\n", alt);
     }
+    draw_separator(80);
 
-    // Read and display speed
+    // Speed section
     char speed2d[64], speed3d[64], vspeed[64];
     if (read_from_file("speed2d", speed2d, sizeof(speed2d)) &&
         read_from_file("speed3d", speed3d, sizeof(speed3d)) &&
         read_from_file("vertical_speed", vspeed, sizeof(vspeed)))
     {
-        printf("Speed: 2D: %s km/h, 3D: %s km/h, Vertical: %s m/s\n", speed2d, speed3d, vspeed);
+        printf("║ Speed:                                                                   ║\n");
+        printf("║   2D: %-10s km/h    3D: %-10s km/h    Vertical: %-8s m/s ║\n",
+               speed2d, speed3d, vspeed);
     }
+    draw_separator(80);
 
-    // Read and display satellites
-    if (read_from_file("satellites", value, sizeof(value)))
+    // Satellites and DOP section
+    char sats[64], pdop[64], hdop[64], vdop[64];
+    if (read_from_file("satellites", sats, sizeof(sats)))
     {
-        printf("Satellites: %s\n", value);
+        printf("║ Satellites: %-65s ║\n", sats);
     }
 
-    // Read and display timestamp
+    if (read_from_file("pdop", pdop, sizeof(pdop)) &&
+        read_from_file("hdop", hdop, sizeof(hdop)) &&
+        read_from_file("vdop", vdop, sizeof(vdop)))
+    {
+        printf("║ DOP: PDOP: %-8s HDOP: %-8s VDOP: %-8s                     ║\n",
+               pdop, hdop, vdop);
+    }
+    draw_separator(80);
+
+    // Timestamp section
     if (read_from_file("timestamp", value, sizeof(value)))
     {
-        printf("Timestamp: %s\n", value);
+        printf("║ Timestamp: %-65s ║\n", value);
     }
 
+    // Bottom border
+    printf("╚══════════════════════════════════════════════════════════════════════════════╝\n");
     printf("\nPress Ctrl+C to exit\n");
 }
 
@@ -102,13 +134,13 @@ int main()
     struct stat st;
     if (stat(GPS_DIR, &st) == -1)
     {
-        printf("GPS data directory not found. Please run gps_reader first.\n");
+        printf("GPS data directory not found. Please run gps first.\n");
         return 1;
     }
 
     while (1)
     {
-        display_gps_data();
+        display_boxed_data();
         sleep(1); // Update every second
     }
 

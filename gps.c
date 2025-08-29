@@ -9,12 +9,36 @@
 #include <time.h>
 #include <unistd.h>
 
-#define GPS_PORT "/dev/ttyS0"
-#define BAUDRATE B9600
+#define DEFAULT_GPS_PORT "/dev/ttyS0"
+#define DEFAULT_BAUDRATE B9600
 #define GPS_DIR "/tmp/gps"
 
+// Function to convert baudrate string to speed_t
+speed_t get_baudrate(int baud)
+{
+    switch (baud)
+    {
+    case 4800:
+        return B4800;
+    case 9600:
+        return B9600;
+    case 19200:
+        return B19200;
+    case 38400:
+        return B38400;
+    case 57600:
+        return B57600;
+    case 115200:
+        return B115200;
+    case 230400:
+        return B230400;
+    default:
+        return B9600;
+    }
+}
+
 // Function to configure the serial port
-int configure_serial_port(int fd)
+int configure_serial_port(int fd, speed_t baudrate)
 {
     struct termios tty;
 
@@ -24,8 +48,8 @@ int configure_serial_port(int fd)
         return -1;
     }
 
-    cfsetospeed(&tty, BAUDRATE);
-    cfsetispeed(&tty, BAUDRATE);
+    cfsetospeed(&tty, baudrate);
+    cfsetispeed(&tty, baudrate);
 
     tty.c_cflag &= ~PARENB;
     tty.c_cflag &= ~CSTOPB;
@@ -151,6 +175,10 @@ struct GPSData
     double vertical_speed;     // Vertical speed in m/s
     double last_altitude;      // Previous altitude for vertical speed calculation
     time_t last_altitude_time; // Time of last altitude measurement
+    double pdop;               // Position Dilution of Precision
+    double hdop;               // Horizontal Dilution of Precision
+    double vdop;               // Vertical Dilution of Precision
+    int has_time;              // Flag to indicate if time data is available
 };
 
 struct GPSData gpsInfo;
@@ -195,6 +223,37 @@ void calculate_3d_speed()
                             gpsInfo.vertical_speed * gpsInfo.vertical_speed);
 }
 
+// Function to check if GPS data is valid
+int is_gps_data_valid()
+{
+    // Check if we have time data (indicates a fix attempt)
+    if (!gpsInfo.has_time)
+    {
+        return 0;
+    }
+
+    // Check if coordinates are within valid ranges
+    if (gpsInfo.latitude < -90 || gpsInfo.latitude > 90 ||
+        gpsInfo.longitude < -180 || gpsInfo.longitude > 180)
+    {
+        return 0;
+    }
+
+    // Check if we have a reasonable number of satellites
+    if (gpsInfo.satellites < 3)
+    {
+        return 0;
+    }
+
+    // Check if DOP values are reasonable (lower is better)
+    if (gpsInfo.hdop > 10.0 || gpsInfo.vdop > 10.0 || gpsInfo.pdop > 10.0)
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
 // Function to update GPS value files
 void update_gps_files()
 {
@@ -202,19 +261,20 @@ void update_gps_files()
     static char datetime_str[64];
     static struct tm timeinfo;
 
-    // Only update files if we have valid data
-    if (gpsInfo.year < 2000)
+    // Check if GPS data is valid
+    int valid = is_gps_data_valid();
+
+    // Write validity flag
+    write_to_file("valid", valid ? "1" : "0");
+
+    if (!valid)
     {
-        write_to_file("valid", "0");
         return;
     }
 
     // Calculate vertical speed and 3D speed
     calculate_vertical_speed();
     calculate_3d_speed();
-
-    // Write validity flag
-    write_to_file("valid", "1");
 
     // Write basic GPS values
     snprintf(value_str, sizeof(value_str), "%.6f", gpsInfo.longitude);
@@ -239,6 +299,16 @@ void update_gps_files()
     // Write vertical speed
     snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.vertical_speed);
     write_to_file("vertical_speed", value_str);
+
+    // Write DOP values
+    snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.pdop);
+    write_to_file("pdop", value_str);
+
+    snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.hdop);
+    write_to_file("hdop", value_str);
+
+    snprintf(value_str, sizeof(value_str), "%.2f", gpsInfo.vdop);
+    write_to_file("vdop", value_str);
 
     // Write date and time values
     snprintf(value_str, sizeof(value_str), "%04d", gpsInfo.year);
@@ -295,7 +365,8 @@ void parse_nmea_sentence(const char* sentence)
     if (strncmp(sentence, "$GPRMC", 6) != 0 &&
         strncmp(sentence, "$GPVTG", 6) != 0 &&
         strncmp(sentence, "$GPGGA", 6) != 0 &&
-        strncmp(sentence, "$GPGLL", 6) != 0)
+        strncmp(sentence, "$GPGLL", 6) != 0 &&
+        strncmp(sentence, "$GPGSA", 6) != 0)
     {
         // Print unknown sentence type
         printf("Unknown sentence type: %s\n", sentence);
@@ -314,26 +385,42 @@ void parse_nmea_sentence(const char* sentence)
     {
         if (num_components >= 10)
         {
-            sscanf(components[1], "%2d%2d%2d.%2d", &gpsInfo.hour, &gpsInfo.minute, &gpsInfo.second, &gpsInfo.millisecond);
-            float latitude = atof(components[3]);
-            char lat_dir = components[4][0];
-            float longitude = atof(components[5]);
-            char lon_dir = components[6][0];
-            gpsInfo.latitude = convert_to_decimal_degrees(latitude, lat_dir);
-            gpsInfo.longitude = convert_to_decimal_degrees(longitude, lon_dir);
-            gpsInfo.knots = atof(components[7]);
-            int date = atoi(components[9]);
-            gpsInfo.day = date / 10000;
-            gpsInfo.month = (date / 100) % 100;
-            gpsInfo.year = date % 100 + 2000;
-
-            // Check if data is valid (status field)
-            if (components[2][0] == 'A')
+            // Check if time field is not empty
+            if (strlen(components[1]) > 0)
             {
-                gpsInfo.valid = 1;
+                sscanf(components[1], "%2d%2d%2d.%2d", &gpsInfo.hour, &gpsInfo.minute, &gpsInfo.second, &gpsInfo.millisecond);
+                gpsInfo.has_time = 1;
+
+                float latitude = atof(components[3]);
+                char lat_dir = components[4][0];
+                float longitude = atof(components[5]);
+                char lon_dir = components[6][0];
+                gpsInfo.latitude = convert_to_decimal_degrees(latitude, lat_dir);
+                gpsInfo.longitude = convert_to_decimal_degrees(longitude, lon_dir);
+                gpsInfo.knots = atof(components[7]);
+
+                // Check if date field is not empty
+                if (strlen(components[9]) > 0)
+                {
+                    int date = atoi(components[9]);
+                    gpsInfo.day = date / 10000;
+                    gpsInfo.month = (date / 100) % 100;
+                    gpsInfo.year = date % 100 + 2000;
+                }
+
+                // Check if data is valid (status field)
+                if (components[2][0] == 'A')
+                {
+                    gpsInfo.valid = 1;
+                }
+                else
+                {
+                    gpsInfo.valid = 0;
+                }
             }
             else
             {
+                gpsInfo.has_time = 0;
                 gpsInfo.valid = 0;
             }
 
@@ -354,23 +441,34 @@ void parse_nmea_sentence(const char* sentence)
     {
         if (num_components >= 9)
         {
-            sscanf(components[1], "%2d%2d%2d.%2d", &gpsInfo.hour, &gpsInfo.minute, &gpsInfo.second, &gpsInfo.millisecond);
-            float latitude = atof(components[2]);
-            char lat_dir = components[3][0];
-            float longitude = atof(components[4]);
-            char lon_dir = components[5][0];
-            gpsInfo.latitude = convert_to_decimal_degrees(latitude, lat_dir);
-            gpsInfo.longitude = convert_to_decimal_degrees(longitude, lon_dir);
-            gpsInfo.satellites = atoi(components[7]);
-            gpsInfo.altitude = atof(components[9]);
-
-            // Check if data is valid (fix quality field)
-            if (atoi(components[6]) > 0)
+            // Check if time field is not empty
+            if (strlen(components[1]) > 0)
             {
-                gpsInfo.valid = 1;
+                sscanf(components[1], "%2d%2d%2d.%2d", &gpsInfo.hour, &gpsInfo.minute, &gpsInfo.second, &gpsInfo.millisecond);
+                gpsInfo.has_time = 1;
+
+                float latitude = atof(components[2]);
+                char lat_dir = components[3][0];
+                float longitude = atof(components[4]);
+                char lon_dir = components[5][0];
+                gpsInfo.latitude = convert_to_decimal_degrees(latitude, lat_dir);
+                gpsInfo.longitude = convert_to_decimal_degrees(longitude, lon_dir);
+                gpsInfo.satellites = atoi(components[7]);
+                gpsInfo.altitude = atof(components[9]);
+
+                // Check if data is valid (fix quality field)
+                if (atoi(components[6]) > 0)
+                {
+                    gpsInfo.valid = 1;
+                }
+                else
+                {
+                    gpsInfo.valid = 0;
+                }
             }
             else
             {
+                gpsInfo.has_time = 0;
                 gpsInfo.valid = 0;
             }
 
@@ -381,34 +479,96 @@ void parse_nmea_sentence(const char* sentence)
     {
         if (num_components >= 6)
         {
-            float latitude = atof(components[1]);
-            char lat_dir = components[2][0];
-            float longitude = atof(components[3]);
-            char lon_dir = components[4][0];
-            gpsInfo.latitude = convert_to_decimal_degrees(latitude, lat_dir);
-            gpsInfo.longitude = convert_to_decimal_degrees(longitude, lon_dir);
-            sscanf(components[5], "%2d%2d%2d.%2d", &gpsInfo.hour, &gpsInfo.minute, &gpsInfo.second, &gpsInfo.millisecond);
-
-            // Check if data is valid (status field)
-            if (components[6][0] == 'A')
+            // Check if time field is not empty
+            if (strlen(components[5]) > 0)
             {
-                gpsInfo.valid = 1;
+                sscanf(components[5], "%2d%2d%2d.%2d", &gpsInfo.hour, &gpsInfo.minute, &gpsInfo.second, &gpsInfo.millisecond);
+                gpsInfo.has_time = 1;
+
+                float latitude = atof(components[1]);
+                char lat_dir = components[2][0];
+                float longitude = atof(components[3]);
+                char lon_dir = components[4][0];
+                gpsInfo.latitude = convert_to_decimal_degrees(latitude, lat_dir);
+                gpsInfo.longitude = convert_to_decimal_degrees(longitude, lon_dir);
+
+                // Check if data is valid (status field)
+                if (components[6][0] == 'A')
+                {
+                    gpsInfo.valid = 1;
+                }
+                else
+                {
+                    gpsInfo.valid = 0;
+                }
             }
             else
             {
+                gpsInfo.has_time = 0;
                 gpsInfo.valid = 0;
             }
 
             update_gps_files();
         }
     }
+    else if (strncmp(sentence, "$GPGSA", 6) == 0)
+    {
+        // $GPGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99*30
+        if (num_components >= 18)
+        {
+            // Parse DOP values (last three fields)
+            gpsInfo.pdop = atof(components[15]); // Position Dilution of Precision
+            gpsInfo.hdop = atof(components[16]); // Horizontal Dilution of Precision
+            gpsInfo.vdop = atof(components[17]); // Vertical Dilution of Precision
+
+            update_gps_files();
+        }
+    }
 }
 
-int main()
+void print_usage(const char* program_name)
 {
+    printf("Usage: %s [options]\n", program_name);
+    printf("Options:\n");
+    printf("  -p <port>     Serial port (default: %s)\n", DEFAULT_GPS_PORT);
+    printf("  -b <baudrate> Baud rate (default: 9600)\n");
+    printf("  -h            Show this help message\n");
+}
+
+int main(int argc, char* argv[])
+{
+    char* gps_port = DEFAULT_GPS_PORT;
+    int baudrate = 9600;
+    speed_t speed = DEFAULT_BAUDRATE;
+
+    // Parse command line arguments
+    int opt;
+    while ((opt = getopt(argc, argv, "p:b:h")) != -1)
+    {
+        switch (opt)
+        {
+        case 'p':
+            gps_port = optarg;
+            break;
+        case 'b':
+            baudrate = atoi(optarg);
+            speed = get_baudrate(baudrate);
+            break;
+        case 'h':
+            print_usage(argv[0]);
+            return 0;
+        default:
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    printf("Using serial port: %s, baudrate: %d\n", gps_port, baudrate);
+
     // Initialize GPS data structure
     memset(&gpsInfo, 0, sizeof(gpsInfo));
-    gpsInfo.valid = 0; // Initially invalid
+    gpsInfo.valid = 0;    // Initially invalid
+    gpsInfo.has_time = 0; // Initially no time data
 
     // Create /tmp/gps directory
     mkdir(GPS_DIR, 0777);
@@ -416,7 +576,7 @@ int main()
     // Write initial valid file
     write_to_file("valid", "0");
 
-    int serial_fd = open(GPS_PORT, O_RDWR | O_NOCTTY);
+    int serial_fd = open(gps_port, O_RDWR | O_NOCTTY);
     if (serial_fd == -1)
     {
         perror("Error opening serial port");
@@ -424,7 +584,7 @@ int main()
     }
 
     // Configure the serial port
-    if (configure_serial_port(serial_fd) != 0)
+    if (configure_serial_port(serial_fd, speed) != 0)
     {
         close(serial_fd);
         return 1;

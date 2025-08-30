@@ -13,12 +13,13 @@
 #define DEFAULT_BAUDRATE B9600
 #define GPS_DIR "/tmp/gps"
 #define GPS_DATA_FILE "/tmp/gps/gps_data"
-#define MAX_SATELLITES 24    // Maximum number of satellites to track
-#define DEFAULT_WAIT_TIME 10 // Default wait time in milliseconds
+#define MAX_SATELLITES 24       // Maximum number of satellites to track
+#define DEFAULT_WRITE_DELAY 100 // Default write delay in milliseconds
 
 // Global flags
 int verbose = 0;
-int wait_time_ms = DEFAULT_WAIT_TIME;
+int write_delay_ms = DEFAULT_WRITE_DELAY;
+int data_updated = 0; // Flag to indicate if data has been updated since last write
 
 // Function to convert baudrate string to speed_t
 speed_t get_baudrate(int baud)
@@ -84,41 +85,70 @@ int configure_serial_port(int fd, speed_t baudrate)
     return 0;
 }
 
-// Function to read a line from the serial port
-int read_line(int fd, char* buffer, size_t buffer_size)
+// Function to read data in chunks and process complete lines
+int read_buffered_data(int fd, char* buffer, size_t* buffer_len, size_t buffer_size)
 {
-    int index = 0;
-    char c;
+    char temp_buf[1024];
+    ssize_t bytes_read = read(fd, temp_buf, sizeof(temp_buf));
 
-    while (index < buffer_size - 1)
+    if (bytes_read == -1)
     {
-        ssize_t bytes_read = read(fd, &c, 1);
-        if (bytes_read == -1)
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
         {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-            {
-                usleep(wait_time_ms * 1000); // Use the configured wait time
-                continue;
-            }
-            perror("Error reading from serial port");
-            return -1;
+            return 0; // No data available, not an error
         }
-        if (bytes_read == 0)
-        {
-            usleep(wait_time_ms * 1000); // Use the configured wait time
-            continue;
-        }
-
-        if (c == '\n' || c == '\r')
-        {
-            buffer[index] = '\0';
-            return 0;
-        }
-
-        buffer[index++] = c;
+        perror("Error reading from serial port");
+        return -1;
     }
 
-    buffer[index] = '\0';
+    // Append new data to buffer
+    if (*buffer_len + bytes_read > buffer_size)
+    {
+        // Prevent buffer overflow by keeping only the last (buffer_size - 1) bytes
+        size_t keep = buffer_size - 1 - bytes_read;
+        if (keep > 0)
+        {
+            memmove(buffer, buffer + (*buffer_len - keep), keep);
+            *buffer_len = keep;
+        }
+        else
+        {
+            *buffer_len = 0;
+        }
+    }
+
+    memcpy(buffer + *buffer_len, temp_buf, bytes_read);
+    *buffer_len += bytes_read;
+    buffer[*buffer_len] = '\0';
+
+    // Process complete lines
+    char* line_start = buffer;
+    char* line_end;
+    while ((line_end = strchr(line_start, '\n')) != NULL)
+    {
+        *line_end = '\0'; // Null-terminate the line
+
+        // Remove trailing carriage return if present
+        if (line_end > line_start && *(line_end - 1) == '\r')
+        {
+            *(line_end - 1) = '\0';
+        }
+
+        // Process the NMEA sentence if it's not empty
+        if (strlen(line_start) > 0)
+        {
+            parse_nmea_sentence(line_start);
+        }
+
+        line_start = line_end + 1;
+    }
+
+    // Move remaining data to the start of the buffer
+    size_t remaining = buffer + *buffer_len - line_start;
+    memmove(buffer, line_start, remaining);
+    *buffer_len = remaining;
+    buffer[*buffer_len] = '\0';
+
     return 0;
 }
 
@@ -379,11 +409,11 @@ void update_gps_data()
         gpsInfo.speed_3d = 0;
     }
 
-    // Write all data to the single file
-    write_gps_data();
+    // Mark data as updated for file writing
+    data_updated = 1;
 }
 
-// Function to parse the NMEA sentence
+// Function to parse the NMEA sentence (using the original parsing logic)
 void parse_nmea_sentence(const char* sentence)
 {
     if (sentence[0] != '$')
@@ -637,7 +667,7 @@ void print_usage(const char* program_name)
     printf("Options:\n");
     printf("  -p <port>     Serial port (default: %s)\n", DEFAULT_GPS_PORT);
     printf("  -b <baudrate> Baud rate (default: 9600)\n");
-    printf("  -w <ms>       Wait time in milliseconds (default: %d)\n", DEFAULT_WAIT_TIME);
+    printf("  -w <ms>       Write delay in milliseconds (default: %d)\n", DEFAULT_WRITE_DELAY);
     printf("  -v            Enable verbose output (print NMEA sentences)\n");
     printf("  -h            Show this help message\n");
 }
@@ -647,8 +677,9 @@ int main(int argc, char* argv[])
     char* gps_port = DEFAULT_GPS_PORT;
     int baudrate = 9600;
     speed_t speed = DEFAULT_BAUDRATE;
-    verbose = 0;                      // Default to non-verbose mode
-    wait_time_ms = DEFAULT_WAIT_TIME; // Default wait time
+    verbose = 0;                          // Default to non-verbose mode
+    write_delay_ms = DEFAULT_WRITE_DELAY; // Default write delay
+    data_updated = 0;                     // Initially no data to write
 
     // Parse command line arguments
     int opt;
@@ -664,11 +695,11 @@ int main(int argc, char* argv[])
             speed = get_baudrate(baudrate);
             break;
         case 'w':
-            wait_time_ms = atoi(optarg);
-            if (wait_time_ms < 1)
-                wait_time_ms = 1; // Minimum 1ms
-            if (wait_time_ms > 1000)
-                wait_time_ms = 1000; // Maximum 1000ms
+            write_delay_ms = atoi(optarg);
+            if (write_delay_ms < 0)
+                write_delay_ms = 0; // Minimum 0ms
+            if (write_delay_ms > 5000)
+                write_delay_ms = 5000; // Maximum 5000ms
             break;
         case 'v':
             verbose = 1;
@@ -682,8 +713,8 @@ int main(int argc, char* argv[])
         }
     }
 
-    printf("Using serial port: %s, baudrate: %d, wait time: %dms\n",
-           gps_port, baudrate, wait_time_ms);
+    printf("Using serial port: %s, baudrate: %d, write delay: %dms\n",
+           gps_port, baudrate, write_delay_ms);
     if (verbose)
     {
         printf("Verbose mode enabled - printing NMEA sentences\n");
@@ -721,17 +752,34 @@ int main(int argc, char* argv[])
     // Set non-blocking mode to avoid busy waiting
     fcntl(serial_fd, F_SETFL, O_NONBLOCK);
 
-    char buffer[256];
+    char buffer[4096]; // Larger buffer for accumulating data
+    size_t buffer_len = 0;
+    struct timespec last_write_time;
+    clock_gettime(CLOCK_MONOTONIC, &last_write_time);
+
     while (1)
     {
-        if (read_line(serial_fd, buffer, sizeof(buffer)) == 0)
+        // Read and process data in chunks
+        if (read_buffered_data(serial_fd, buffer, &buffer_len, sizeof(buffer)) != 0)
         {
-            if (strlen(buffer) > 0)
-            {
-                parse_nmea_sentence(buffer);
-            }
+            break; // Exit on read error
         }
-        usleep(wait_time_ms * 1000); // Use the configured wait time
+
+        // Check if it's time to write to file
+        struct timespec current_time;
+        clock_gettime(CLOCK_MONOTONIC, &current_time);
+
+        long elapsed_ms = (current_time.tv_sec - last_write_time.tv_sec) * 1000 +
+                          (current_time.tv_nsec - last_write_time.tv_nsec) / 1000000;
+
+        if (data_updated && elapsed_ms >= write_delay_ms)
+        {
+            write_gps_data();
+            data_updated = 0; // Reset the flag
+            last_write_time = current_time;
+        }
+
+        usleep(10000); // Sleep for 10ms to reduce CPU usage
     }
 
     close(serial_fd);

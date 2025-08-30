@@ -56,7 +56,7 @@ int parse_gps_data_file(struct GPSDisplayData* data)
     strcpy(data->latitude, "N/A");
     strcpy(data->longitude, "N/A");
     strcpy(data->altitude, "N/A");
-    strcpy(data->satellites, "N/A");
+    strcpy(data->satellites, "0");
     strcpy(data->speed2d, "N/A");
     strcpy(data->speed3d, "N/A");
     strcpy(data->vertical_speed, "N/A");

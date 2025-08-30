@@ -244,7 +244,7 @@ void write_gps_data()
             fprintf(file, "latitude: N/A\n");
             fprintf(file, "longitude: N/A\n");
             fprintf(file, "altitude: N/A\n");
-            fprintf(file, "satellites: N/A\n");
+            fprintf(file, "satellites: 0\n");
             fprintf(file, "speed2d: N/A\n");
             fprintf(file, "speed3d: N/A\n");
             fprintf(file, "vertical_speed: N/A\n");

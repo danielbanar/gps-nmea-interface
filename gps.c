@@ -13,10 +13,12 @@
 #define DEFAULT_BAUDRATE B9600
 #define GPS_DIR "/tmp/gps"
 #define GPS_DATA_FILE "/tmp/gps/gps_data"
-#define MAX_SATELLITES 24 // Maximum number of satellites to track
+#define MAX_SATELLITES 24    // Maximum number of satellites to track
+#define DEFAULT_WAIT_TIME 10 // Default wait time in milliseconds
 
-// Global flag for verbose output
+// Global flags
 int verbose = 0;
+int wait_time_ms = DEFAULT_WAIT_TIME;
 
 // Function to convert baudrate string to speed_t
 speed_t get_baudrate(int baud)
@@ -95,7 +97,7 @@ int read_line(int fd, char* buffer, size_t buffer_size)
         {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
             {
-                usleep(10000); // Sleep for 10ms to avoid busy waiting
+                usleep(wait_time_ms * 1000); // Use the configured wait time
                 continue;
             }
             perror("Error reading from serial port");
@@ -103,7 +105,7 @@ int read_line(int fd, char* buffer, size_t buffer_size)
         }
         if (bytes_read == 0)
         {
-            usleep(10000); // Sleep for 10ms if no data available
+            usleep(wait_time_ms * 1000); // Use the configured wait time
             continue;
         }
 
@@ -393,13 +395,22 @@ void parse_nmea_sentence(const char* sentence)
         printf("%s\n", sentence);
     }
 
-    // Only process sentences we care about to save CPU
+    // Check for supported sentence types (both standard GPS and multi-GNSS)
     if (strncmp(sentence, "$GPRMC", 6) != 0 &&
+        strncmp(sentence, "$GNRMC", 6) != 0 &&
         strncmp(sentence, "$GPVTG", 6) != 0 &&
+        strncmp(sentence, "$GNVTG", 6) != 0 &&
         strncmp(sentence, "$GPGGA", 6) != 0 &&
+        strncmp(sentence, "$GNGGA", 6) != 0 &&
         strncmp(sentence, "$GPGLL", 6) != 0 &&
+        strncmp(sentence, "$GNGLL", 6) != 0 &&
         strncmp(sentence, "$GPGSA", 6) != 0 &&
-        strncmp(sentence, "$GPGSV", 6) != 0)
+        strncmp(sentence, "$GNGSA", 6) != 0 &&
+        strncmp(sentence, "$GPGSV", 6) != 0 &&
+        strncmp(sentence, "$GAGSV", 6) != 0 &&
+        strncmp(sentence, "$GBGSV", 6) != 0 &&
+        strncmp(sentence, "$GQGSV", 6) != 0 &&
+        strncmp(sentence, "$GLGSV", 6) != 0)
     {
         // Print unknown sentence type only if verbose mode is enabled
         if (verbose)
@@ -417,7 +428,8 @@ void parse_nmea_sentence(const char* sentence)
     char* components[20];
     int num_components = split_string(sentence_copy, components, 20);
 
-    if (strncmp(sentence, "$GPRMC", 6) == 0)
+    // Handle RMC sentences (both GP and GN)
+    if (strncmp(sentence, "$GPRMC", 6) == 0 || strncmp(sentence, "$GNRMC", 6) == 0)
     {
         if (num_components >= 10)
         {
@@ -463,7 +475,8 @@ void parse_nmea_sentence(const char* sentence)
             update_gps_data();
         }
     }
-    else if (strncmp(sentence, "$GPVTG", 6) == 0)
+    // Handle VTG sentences (both GP and GN)
+    else if (strncmp(sentence, "$GPVTG", 6) == 0 || strncmp(sentence, "$GNVTG", 6) == 0)
     {
         if (num_components >= 8)
         {
@@ -473,7 +486,8 @@ void parse_nmea_sentence(const char* sentence)
             update_gps_data();
         }
     }
-    else if (strncmp(sentence, "$GPGGA", 6) == 0)
+    // Handle GGA sentences (both GP and GN)
+    else if (strncmp(sentence, "$GPGGA", 6) == 0 || strncmp(sentence, "$GNGGA", 6) == 0)
     {
         if (num_components >= 9)
         {
@@ -511,7 +525,8 @@ void parse_nmea_sentence(const char* sentence)
             update_gps_data();
         }
     }
-    else if (strncmp(sentence, "$GPGLL", 6) == 0)
+    // Handle GLL sentences (both GP and GN)
+    else if (strncmp(sentence, "$GPGLL", 6) == 0 || strncmp(sentence, "$GNGLL", 6) == 0)
     {
         if (num_components >= 6)
         {
@@ -547,7 +562,8 @@ void parse_nmea_sentence(const char* sentence)
             update_gps_data();
         }
     }
-    else if (strncmp(sentence, "$GPGSA", 6) == 0)
+    // Handle GSA sentences (both GP and GN)
+    else if (strncmp(sentence, "$GPGSA", 6) == 0 || strncmp(sentence, "$GNGSA", 6) == 0)
     {
         // $GPGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99*30
         if (num_components >= 18)
@@ -560,14 +576,25 @@ void parse_nmea_sentence(const char* sentence)
             update_gps_data();
         }
     }
-    else if (strncmp(sentence, "$GPGSV", 6) == 0)
+    // Handle GSV sentences from all supported satellite systems
+    else if (strncmp(sentence, "$GPGSV", 6) == 0 ||
+             strncmp(sentence, "$GAGSV", 6) == 0 || // Galileo
+             strncmp(sentence, "$GBGSV", 6) == 0 || // BeiDou
+             strncmp(sentence, "$GQGSV", 6) == 0 || // QZSS
+             strncmp(sentence, "$GLGSV", 6) == 0)   // GLONASS
     {
         // $GPGSV,4,4,14,25,10,246,27,32,06,325,*7C
         if (num_components >= 8)
         {
-            int total_messages = atoi(components[1]);         // Total number of GSV messages
-            int message_num = atoi(components[2]);            // Current message number
-            gpsInfo.satellites_in_view = atoi(components[3]); // Total satellites in view
+            int total_messages = atoi(components[1]);     // Total number of GSV messages
+            int message_num = atoi(components[2]);        // Current message number
+            int satellites_in_view = atoi(components[3]); // Total satellites in view
+
+            // Update the total satellites in view if this is higher than current count
+            if (satellites_in_view > gpsInfo.satellites_in_view)
+            {
+                gpsInfo.satellites_in_view = satellites_in_view;
+            }
 
             // Calculate how many satellites are described in this message
             int satellites_in_this_message = (num_components - 4) / 4;
@@ -586,7 +613,16 @@ void parse_nmea_sentence(const char* sentence)
                     gpsInfo.satellite_info[sat_index].prn = atoi(components[base_index]);
                     gpsInfo.satellite_info[sat_index].elevation = atoi(components[base_index + 1]);
                     gpsInfo.satellite_info[sat_index].azimuth = atoi(components[base_index + 2]);
-                    gpsInfo.satellite_info[sat_index].snr = atoi(components[base_index + 3]);
+
+                    // Handle empty SNR values (represented by empty string)
+                    if (strlen(components[base_index + 3]) > 0)
+                    {
+                        gpsInfo.satellite_info[sat_index].snr = atoi(components[base_index + 3]);
+                    }
+                    else
+                    {
+                        gpsInfo.satellite_info[sat_index].snr = 0; // No signal
+                    }
                 }
             }
 
@@ -601,6 +637,7 @@ void print_usage(const char* program_name)
     printf("Options:\n");
     printf("  -p <port>     Serial port (default: %s)\n", DEFAULT_GPS_PORT);
     printf("  -b <baudrate> Baud rate (default: 9600)\n");
+    printf("  -w <ms>       Wait time in milliseconds (default: %d)\n", DEFAULT_WAIT_TIME);
     printf("  -v            Enable verbose output (print NMEA sentences)\n");
     printf("  -h            Show this help message\n");
 }
@@ -610,11 +647,12 @@ int main(int argc, char* argv[])
     char* gps_port = DEFAULT_GPS_PORT;
     int baudrate = 9600;
     speed_t speed = DEFAULT_BAUDRATE;
-    verbose = 0; // Default to non-verbose mode
+    verbose = 0;                      // Default to non-verbose mode
+    wait_time_ms = DEFAULT_WAIT_TIME; // Default wait time
 
     // Parse command line arguments
     int opt;
-    while ((opt = getopt(argc, argv, "p:b:vh")) != -1)
+    while ((opt = getopt(argc, argv, "p:b:w:vh")) != -1)
     {
         switch (opt)
         {
@@ -624,6 +662,13 @@ int main(int argc, char* argv[])
         case 'b':
             baudrate = atoi(optarg);
             speed = get_baudrate(baudrate);
+            break;
+        case 'w':
+            wait_time_ms = atoi(optarg);
+            if (wait_time_ms < 1)
+                wait_time_ms = 1; // Minimum 1ms
+            if (wait_time_ms > 1000)
+                wait_time_ms = 1000; // Maximum 1000ms
             break;
         case 'v':
             verbose = 1;
@@ -637,7 +682,8 @@ int main(int argc, char* argv[])
         }
     }
 
-    printf("Using serial port: %s, baudrate: %d\n", gps_port, baudrate);
+    printf("Using serial port: %s, baudrate: %d, wait time: %dms\n",
+           gps_port, baudrate, wait_time_ms);
     if (verbose)
     {
         printf("Verbose mode enabled - printing NMEA sentences\n");
@@ -685,7 +731,7 @@ int main(int argc, char* argv[])
                 parse_nmea_sentence(buffer);
             }
         }
-        usleep(10000); // Sleep for 10ms to reduce CPU usage
+        usleep(wait_time_ms * 1000); // Use the configured wait time
     }
 
     close(serial_fd);

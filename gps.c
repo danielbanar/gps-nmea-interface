@@ -220,7 +220,7 @@ void write_gps_data()
             fprintf(file, "month: N/A\n");
             fprintf(file, "day: N/A\n");
             fprintf(file, "hour: N/A\n");
-            fprintf(file, "minette: N/A\n");
+            fprintf(file, "minute: N/A\n");
             fprintf(file, "second: N/A\n");
             fprintf(file, "millisecond: N/A\n");
         }

@@ -13,6 +13,7 @@
 #define DEFAULT_BAUDRATE B9600
 #define GPS_DIR "/tmp/gps"
 #define GPS_DATA_FILE "/tmp/gps/gps_data"
+#define MAX_SATELLITES 24 // Maximum number of satellites to track
 
 // Global flag for verbose output
 int verbose = 0;
@@ -158,6 +159,15 @@ float convert_to_decimal_degrees(float coordinate, char direction)
     return decimal_degrees;
 }
 
+// Structure to store information about individual satellites
+struct SatelliteInfo
+{
+    int prn;       // Satellite PRN number
+    int elevation; // Elevation in degrees
+    int azimuth;   // Azimuth in degrees
+    int snr;       // Signal-to-Noise Ratio in dBHz
+};
+
 struct GPSData
 {
     int year;
@@ -186,6 +196,10 @@ struct GPSData
     int has_time;              // Flag to indicate if time data is available
     char status[16];           // Status string
     char datetime[64];         // Formatted date and time
+
+    // GSV sentence data
+    int satellites_in_view;                              // Total number of satellites in view
+    struct SatelliteInfo satellite_info[MAX_SATELLITES]; // Info for each satellite
 };
 
 struct GPSData gpsInfo;
@@ -251,6 +265,16 @@ void write_gps_data()
             fprintf(file, "pdop: N/A\n");
             fprintf(file, "hdop: N/A\n");
             fprintf(file, "vdop: N/A\n");
+        }
+
+        // Write satellite information
+        fprintf(file, "satellites_in_view: %d\n", gpsInfo.satellites_in_view);
+        for (int i = 0; i < gpsInfo.satellites_in_view && i < MAX_SATELLITES; i++)
+        {
+            fprintf(file, "satellite_%d_prn: %d\n", i + 1, gpsInfo.satellite_info[i].prn);
+            fprintf(file, "satellite_%d_elevation: %d\n", i + 1, gpsInfo.satellite_info[i].elevation);
+            fprintf(file, "satellite_%d_azimuth: %d\n", i + 1, gpsInfo.satellite_info[i].azimuth);
+            fprintf(file, "satellite_%d_snr: %d\n", i + 1, gpsInfo.satellite_info[i].snr);
         }
 
         fclose(file);
@@ -374,7 +398,8 @@ void parse_nmea_sentence(const char* sentence)
         strncmp(sentence, "$GPVTG", 6) != 0 &&
         strncmp(sentence, "$GPGGA", 6) != 0 &&
         strncmp(sentence, "$GPGLL", 6) != 0 &&
-        strncmp(sentence, "$GPGSA", 6) != 0)
+        strncmp(sentence, "$GPGSA", 6) != 0 &&
+        strncmp(sentence, "$GPGSV", 6) != 0)
     {
         // Print unknown sentence type only if verbose mode is enabled
         if (verbose)
@@ -535,6 +560,39 @@ void parse_nmea_sentence(const char* sentence)
             update_gps_data();
         }
     }
+    else if (strncmp(sentence, "$GPGSV", 6) == 0)
+    {
+        // $GPGSV,4,4,14,25,10,246,27,32,06,325,*7C
+        if (num_components >= 8)
+        {
+            int total_messages = atoi(components[1]);         // Total number of GSV messages
+            int message_num = atoi(components[2]);            // Current message number
+            gpsInfo.satellites_in_view = atoi(components[3]); // Total satellites in view
+
+            // Calculate how many satellites are described in this message
+            int satellites_in_this_message = (num_components - 4) / 4;
+
+            // Start index for satellite data in the array
+            int start_index = (message_num - 1) * 4;
+
+            // Parse satellite data
+            for (int i = 0; i < satellites_in_this_message; i++)
+            {
+                int base_index = 4 + (i * 4);
+                int sat_index = start_index + i;
+
+                if (sat_index < MAX_SATELLITES)
+                {
+                    gpsInfo.satellite_info[sat_index].prn = atoi(components[base_index]);
+                    gpsInfo.satellite_info[sat_index].elevation = atoi(components[base_index + 1]);
+                    gpsInfo.satellite_info[sat_index].azimuth = atoi(components[base_index + 2]);
+                    gpsInfo.satellite_info[sat_index].snr = atoi(components[base_index + 3]);
+                }
+            }
+
+            update_gps_data();
+        }
+    }
 }
 
 void print_usage(const char* program_name)
@@ -587,9 +645,10 @@ int main(int argc, char* argv[])
 
     // Initialize GPS data structure
     memset(&gpsInfo, 0, sizeof(gpsInfo));
-    gpsInfo.valid_time = 0; // Initially invalid time
-    gpsInfo.valid_fix = 0;  // Initially invalid fix
-    gpsInfo.has_time = 0;   // Initially no time data
+    gpsInfo.valid_time = 0;         // Initially invalid time
+    gpsInfo.valid_fix = 0;          // Initially invalid fix
+    gpsInfo.has_time = 0;           // Initially no time data
+    gpsInfo.satellites_in_view = 0; // Initially no satellites in view
     strcpy(gpsInfo.status, "NO_TIME");
     strcpy(gpsInfo.datetime, "N/A");
 

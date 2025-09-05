@@ -20,7 +20,7 @@
 int verbose = 0;
 int write_delay_ms = DEFAULT_WRITE_DELAY;
 int data_updated = 0; // Flag to indicate if data has been updated since last write
-
+void parse_nmea_sentence(const char* sentence);
 // Function to convert baudrate string to speed_t
 speed_t get_baudrate(int baud)
 {

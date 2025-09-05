@@ -1,5 +1,5 @@
-CC = gcc
-CFLAGS = -O2 -Wall -Wextra
+CC = arm-linux-gnueabihf-gcc
+CFLAGS = -Os
 TARGETS = gps gps_monitor
 
 all: $(TARGETS)

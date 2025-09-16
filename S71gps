@@ -10,7 +10,7 @@ case "$1" in
 			echo "Starting GPS daemon..."
 			gps $port $baudrate
 		else
-			echo "GPS service is disabled in /etc/zerotier.conf."
+			echo "GPS service is disabled in /etc/gps.conf"
 			exit 1
 		fi
 		;;

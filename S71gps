@@ -1,27 +1,43 @@
 #!/bin/sh
 
+DAEMON="gps"
+PIDFILE="/var/run/$DAEMON.pid"
+DAEMON_ARGS="-p $port -b $baudrate"
+
+
 if [ -e /etc/gps.conf ]; then
 	. /etc/gps.conf
 fi
 
 case "$1" in
-	start)
-		if [ "$enabled" = "true" ]; then
-			echo "Starting GPS daemon..."
-			gps -p $port -b $baudrate
+start)
+	if [ "$enabled" = "true" ]; then
+		echo "Starting GPS daemon..."
+		start-stop-daemon -b -m -S -q -p "$PIDFILE" -x "$DAEMON" -- $DAEMON_ARGS
+		if [ $? -eq 0 ]; then
+			echo "OK"
 		else
-			echo "GPS service is disabled in /etc/gps.conf"
-			exit 1
+			echo "FAIL"
 		fi
-		;;
-
-	stop)
-		echo "Stopping GPS daemon..."
-		killall -q gps
-		;;
-
-	*)
-		echo "Usage: $0 {start|stop}"
+	else
+		echo "GPS service is disabled in /etc/gps.conf"
 		exit 1
-		;;
+	fi
+	;;
+
+stop)
+	echo "Stopping GPS daemon..."
+	start-stop-daemon -K -q -p "$PIDFILE"
+	if [ $? -eq 0 ]; then
+		rm -f "$PIDFILE"
+		echo "OK"
+	else
+		echo "FAIL"
+	fi
+	;;
+
+*)
+	echo "Usage: $0 {start|stop}"
+	exit 1
+	;;
 esac

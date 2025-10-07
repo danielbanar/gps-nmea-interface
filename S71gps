@@ -8,7 +8,7 @@ case "$1" in
 	start)
 		if [ "$enabled" = "true" ]; then
 			echo "Starting GPS daemon..."
-			gps $port $baudrate
+			gps -p $port -b $baudrate
 		else
 			echo "GPS service is disabled in /etc/gps.conf"
 			exit 1

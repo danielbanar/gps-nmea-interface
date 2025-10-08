@@ -2,12 +2,12 @@
 
 DAEMON="gps"
 PIDFILE="/var/run/$DAEMON.pid"
-DAEMON_ARGS="-p $port -b $baudrate"
-
 
 if [ -e /etc/gps.conf ]; then
 	. /etc/gps.conf
 fi
+
+DAEMON_ARGS="-p $port -b $baudrate -s"
 
 case "$1" in
 start)

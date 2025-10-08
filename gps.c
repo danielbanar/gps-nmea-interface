@@ -8,6 +8,7 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/time.h>
 
 #define DEFAULT_GPS_PORT "/dev/ttyS0"
 #define DEFAULT_BAUDRATE B9600
@@ -20,7 +21,53 @@
 int verbose = 0;
 int write_delay_ms = DEFAULT_WRITE_DELAY;
 int data_updated = 0; // Flag to indicate if data has been updated since last write
+int sync_time = 0;    // Flag to enable system time synchronization
+
+// Structure to store information about individual satellites
+struct SatelliteInfo
+{
+    int prn;       // Satellite PRN number
+    int elevation; // Elevation in degrees
+    int azimuth;   // Azimuth in degrees
+    int snr;       // Signal-to-Noise Ratio in dBHz
+};
+
+struct GPSData
+{
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    int second;
+    int millisecond;
+    double longitude;
+    double latitude;
+    double altitude;
+    double speed_2d; // 2D speed (horizontal)
+    double speed_3d; // 3D speed (horizontal + vertical)
+    double knots;
+    int satellites;
+    time_t timestamp;
+    int valid_time;            // Flag to indicate if time data is valid
+    int valid_fix;             // Flag to indicate if GPS fix is valid
+    double vertical_speed;     // Vertical speed in m/s
+    double last_altitude;      // Previous altitude for vertical speed calculation
+    time_t last_altitude_time; // Time of last altitude measurement
+    double pdop;               // Position Dilution of Precision
+    double hdop;               // Horizontal Dilution of Precision
+    double vdop;               // Vertical Dilution of Precision
+    int has_time;              // Flag to indicate if time data is available
+    char status[16];           // Status string
+    char datetime[64];         // Formatted date and time
+
+    // GSV sentence data
+    int satellites_in_view;                              // Total number of satellites in view
+    struct SatelliteInfo satellite_info[MAX_SATELLITES]; // Info for each satellite
+};
+
 void parse_nmea_sentence(const char* sentence);
+
 // Function to convert baudrate string to speed_t
 speed_t get_baudrate(int baud)
 {
@@ -191,48 +238,63 @@ float convert_to_decimal_degrees(float coordinate, char direction)
     return decimal_degrees;
 }
 
-// Structure to store information about individual satellites
-struct SatelliteInfo
+int set_system_time_from_gps(struct GPSData* gps)
 {
-    int prn;       // Satellite PRN number
-    int elevation; // Elevation in degrees
-    int azimuth;   // Azimuth in degrees
-    int snr;       // Signal-to-Noise Ratio in dBHz
-};
+    if (!gps->valid_time || !gps->has_time)
+        return -1;
 
-struct GPSData
-{
-    int year;
-    int month;
-    int day;
-    int hour;
-    int minute;
-    int second;
-    int millisecond;
-    double longitude;
-    double latitude;
-    double altitude;
-    double speed_2d; // 2D speed (horizontal)
-    double speed_3d; // 3D speed (horizontal + vertical)
-    double knots;
-    int satellites;
-    time_t timestamp;
-    int valid_time;            // Flag to indicate if time data is valid
-    int valid_fix;             // Flag to indicate if GPS fix is valid
-    double vertical_speed;     // Vertical speed in m/s
-    double last_altitude;      // Previous altitude for vertical speed calculation
-    time_t last_altitude_time; // Time of last altitude measurement
-    double pdop;               // Position Dilution of Precision
-    double hdop;               // Horizontal Dilution of Precision
-    double vdop;               // Vertical Dilution of Precision
-    int has_time;              // Flag to indicate if time data is available
-    char status[16];           // Status string
-    char datetime[64];         // Formatted date and time
+    struct timeval tv;
+    struct tm timeinfo;
 
-    // GSV sentence data
-    int satellites_in_view;                              // Total number of satellites in view
-    struct SatelliteInfo satellite_info[MAX_SATELLITES]; // Info for each satellite
-};
+    timeinfo.tm_year = gps->year - 1900;
+    timeinfo.tm_mon = gps->month - 1;
+    timeinfo.tm_mday = gps->day;
+    timeinfo.tm_hour = gps->hour;
+    timeinfo.tm_min = gps->minute;
+    timeinfo.tm_sec = gps->second;
+    timeinfo.tm_isdst = -1; // Let system determine DST
+
+    time_t gps_timestamp = mktime(&timeinfo);
+    if (gps_timestamp == -1)
+    {
+        if (verbose)
+        {
+            printf("Error: Invalid GPS time\n");
+        }
+        return -1;
+    }
+
+    time_t current_time = time(NULL);
+
+    // Only update if GPS time is newer (with 2 second threshold to avoid small fluctuations)
+    int time_diff = abs(gps_timestamp - current_time);
+    if (time_diff > 2)
+    {
+        tv.tv_sec = gps_timestamp;
+        tv.tv_usec = gps->millisecond * 1000;
+
+        if (settimeofday(&tv, NULL) == 0)
+        {
+
+            printf("System time updated from GPS: %s", ctime(&gps_timestamp));
+            return 0;
+        }
+        else
+        {
+            perror("Error setting system time");
+            return -1;
+        }
+    }
+    else if (verbose && time_diff > 0)
+    {
+        printf("Time difference within threshold: GPS=%ld, System=%ld\n", (long)gps_timestamp, (long)current_time);
+    }
+
+    if (verbose)
+        printf("GPS=%ld, System=%ld, diff=%d\n", (long)gps_timestamp, (long)current_time, time_diff);
+
+    return -1;
+}
 
 struct GPSData gpsInfo;
 
@@ -390,6 +452,10 @@ void update_gps_data()
         timeinfo.tm_isdst = -1;
 
         gpsInfo.timestamp = mktime(&timeinfo);
+
+        // Update system time if sync is enabled and GPS time is newer
+        if (sync_time)
+            set_system_time_from_gps(&gpsInfo);
     }
     else
     {
@@ -668,6 +734,7 @@ void print_usage(const char* program_name)
     printf("  -p <port>     Serial port (default: %s)\n", DEFAULT_GPS_PORT);
     printf("  -b <baudrate> Baud rate (default: 9600)\n");
     printf("  -w <ms>       Write delay in milliseconds (default: %d)\n", DEFAULT_WRITE_DELAY);
+    printf("  -s            Sync system time when GPS time is newer\n");
     printf("  -v            Enable verbose output (print NMEA sentences)\n");
     printf("  -h            Show this help message\n");
 }
@@ -680,10 +747,11 @@ int main(int argc, char* argv[])
     verbose = 0;                          // Default to non-verbose mode
     write_delay_ms = DEFAULT_WRITE_DELAY; // Default write delay
     data_updated = 0;                     // Initially no data to write
+    sync_time = 0;                        // Default to no time synchronization
 
     // Parse command line arguments
     int opt;
-    while ((opt = getopt(argc, argv, "p:b:w:vh")) != -1)
+    while ((opt = getopt(argc, argv, "p:b:w:svh")) != -1)
     {
         switch (opt)
         {
@@ -700,6 +768,9 @@ int main(int argc, char* argv[])
                 write_delay_ms = 0; // Minimum 0ms
             if (write_delay_ms > 5000)
                 write_delay_ms = 5000; // Maximum 5000ms
+            break;
+        case 's':
+            sync_time = 1;
             break;
         case 'v':
             verbose = 1;
